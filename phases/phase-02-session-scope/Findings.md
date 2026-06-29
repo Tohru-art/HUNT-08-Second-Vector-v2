@@ -28,9 +28,19 @@ Explain *how* the attacker held an authenticated session against an MFA-enabled 
 |---|---|---|---|
 | Q07: How the Session Beat MFA | Token persistence via "Keep Me Signed In"; refresh token remained valid | `AuthenticationRequirement == singleFactorAuthentication` on attacker sign-ins | MFA was not solved by the attacker. A previously issued, still-valid refresh token was reused, so the platform only required single-factor on subsequent sign-ins. The bypass is **token reuse, not MFA defeat**. |
 | Q08: The Control Surface That Let Them In | Conditional Access did not evaluate the session | `ConditionalAccessStatus == notApplied` | No CA policy was in scope for these sign-ins, so no policy could block, re-challenge, or session-control the attacker. The control surface that should have caught this never engaged. |
-| Q09: Failed Attempts Before Entry | Failed sign-ins preceding the successful session _(populate exact count from your query output)_ | `ResultType != 0` records for the principal before the first `ResultType == 0` from the attacker IP | Shows the access attempt was not a clean single login, there is a probing pattern, useful for timeline anchoring and for distinguishing attacker activity from the user's own. |
-| Q10: Blast Radius of One Token | Multiple first-party resources reachable from the single session _(populate the exact resource/app list from your query output)_ | Distinct `AppDisplayName` / `ResourceDisplayName` accessed under the attacker sign-ins | One reused token did not unlock a single app, it unlocked the user's full set of cloud resources (mail, directory, Graph). The blast radius of one token is the user's entire cloud surface. |
-| Q11: One Continuous Session | Activity ties back to a single continuous session | Shared correlation across the attacker sign-ins from `103.69.224.136` | The attacker operated from one sustained session rather than re-authenticating repeatedly. This is why session revocation (not just password reset) is the correct containment lever. |
+| Q09: Failed Attempts Before Entry | **2** failed sign-ins occurred before successful access | `ResultType != 0` records for the principal before the first successful attacker sign-in | The attacker did not enter cleanly on the first attempt. The two failed attempts establish the pre-entry probing pattern and help anchor the compromise timeline. |
+| Q10: Blast Radius of One Token | **7** Microsoft 365 applications/resources were reached from the single compromised session | Distinct `AppDisplayName` values under the attacker activity | One reused token did not unlock a single app. It unlocked the user's broader cloud surface across Outlook, OfficeHome, Teams, SharePoint, Flow, and App Service. |
+| Q11: One Continuous Session | Activity tied back to session ID **`005d431a-380b-1f5e-e554-16d5010dc28e`** | Shared session identifier across attacker activity | The attacker operated from one sustained session rather than re-authenticating repeatedly. This is why session revocation, not only password reset, is the correct containment lever. |
+
+## Applications Reached
+
+1. `One Outlook Web`
+2. `OfficeHome`
+3. `Microsoft Teams Web Client`
+4. `Office 365 SharePoint Online`
+5. `SharePoint Online Web Client Extensibility`
+6. `Microsoft Flow Portal`
+7. `App Service`
 
 ## Key Pivot Values
 
@@ -38,6 +48,9 @@ Explain *how* the attacker held an authenticated session against an MFA-enabled 
 Auth requirement        : singleFactorAuthentication
 Conditional Access      : notApplied
 Mechanism               : Keep Me Signed In (KMSI) / refresh token reuse
+Failed attempts         : 2
+Blast radius            : 7 applications/resources
+Session ID              : 005d431a-380b-1f5e-e554-16d5010dc28e
 Session continuity      : single sustained session from 103.69.224.136
 ```
 
@@ -47,13 +60,14 @@ The attacker never beat MFA. They inherited a session.
 
 "Keep Me Signed In" issues a long-lived refresh token. As long as that refresh token stays valid, Azure AD can mint new access tokens without forcing a fresh interactive MFA challenge, which is exactly why the attacker's sign-ins show `singleFactorAuthentication`. Layer on `ConditionalAccessStatus == notApplied` and there was no policy in the path to force re-authentication, apply sign-in frequency, or block the anonymized source.
 
-The combination is the whole story of this phase: a persistent token plus an absent Conditional Access evaluation equals an attacker who looks, to the platform, like an already-trusted session. This also dictates containment, because the foothold is a live refresh token, resetting the password alone does **not** evict the attacker. The session has to be revoked.
+The combination is the whole story of this phase: a persistent token plus an absent Conditional Access evaluation equals an attacker who looks, to the platform, like an already-trusted session. The session reached seven Microsoft 365 resources and remained tied to `005d431a-380b-1f5e-e554-16d5010dc28e`. This dictates containment, because the foothold is a live refresh token. Resetting the password alone does **not** evict the attacker. The session has to be revoked.
 
 ## Detection Opportunities
 
 - **Single-factor on risky sign-in**, alert when `AuthenticationRequirement == singleFactorAuthentication` coincides with a non-zero risk level or a known-bad / anonymized IP.
 - **Conditional Access coverage gap**, report on successful sign-ins where `ConditionalAccessStatus == notApplied` for privileged or finance-adjacent users; these are unprotected authentication paths.
 - **Refresh-token longevity**, surface sessions where access continues well beyond the last interactive MFA event, indicating long-lived token reuse.
+- **Multi-app burst from one risky session**, alert when one session reaches multiple first-party Microsoft 365 services in a short window from an anomalous IP.
 
 ## MITRE ATT&CK Mapping
 
