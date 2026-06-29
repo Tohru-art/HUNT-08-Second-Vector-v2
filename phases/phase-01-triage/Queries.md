@@ -1,51 +1,51 @@
 # Phase 01 - Triage: Queries
 
-> Query log for Phase 01. Each entry records why the query was run, the KQL executed, the expected result, the pivot it produced, and its investigation value. Queries reconstructed from the confirmed findings reflect the path an analyst takes from a single risk detection to a confirmed foothold.
+> Query log for Phase 01. These queries move from tenant-wide identity risk to the confirmed compromised user, attacker source, client OS, risk type, risk verdict, and account state.
 
 ---
 
 ## Q01 - The Compromised Principal
 
-**Purpose:** Identify which identity in the tenant is generating Identity Protection risk detections so the rest of the hunt has a single pivot point.
+**Purpose:** Identify which user generated the suspicious Identity Protection risk cluster.
 
 **KQL Query**
 ```kql
 AADUserRiskEvents
-| summarize Detections = count() by UserPrincipalName, RiskEventType
+| summarize Detections = count() by UserPrincipalName
 | order by Detections desc
 ```
 
-**Expected Result:** `m.smith@lognpacific.org` surfaces as the principal carrying the cluster of risk detections.
+**Expected Result:** `m.smith@lognpacific.org`
 
 **Pivot Produced:** Compromised UPN, `m.smith@lognpacific.org`.
 
-**Investigation Value:** Converts a tenant-wide risk signal into a named identity. Every subsequent query in the investigation filters on this UPN.
+**Investigation Value:** Establishes the primary user pivot for the rest of the hunt.
 
 ---
 
 ## Q02 - The Flagged Source
 
-**Purpose:** Determine the source IP address that Identity Protection associated with the risky activity for the compromised principal.
+**Purpose:** Identify the suspicious source IP tied to the compromised principal.
 
 **KQL Query**
 ```kql
-AADUserRiskEvents
+SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
-| summarize Detections = count() by IpAddress
-| order by Detections desc
+| summarize SignIns = count() by IPAddress
+| order by SignIns desc
 ```
 
-**Expected Result:** `103.69.224.136` is the dominant source IP behind the risk detections.
+**Expected Result:** `103.69.224.136`
 
 **Pivot Produced:** Attacker IP, `103.69.224.136`.
 
-**Investigation Value:** This IP becomes the master correlation value reused in Phases 04 and 08 to prove a single actor touched multiple telemetry tables.
+**Investigation Value:** Provides the master infrastructure pivot reused throughout the case.
 
 ---
 
 ## Q03 - The Client OS
 
-**Purpose:** Identify the operating system used during the malicious sign-ins to test whether the device profile matches the user's normal behavior.
+**Purpose:** Determine the operating system reported by the suspicious sign-ins.
 
 **KQL Query**
 ```kql
@@ -53,73 +53,73 @@ SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
 | where IPAddress == "103.69.224.136"
 | extend ClientOS = tostring(DeviceDetail.operatingSystem)
-| summarize count() by ClientOS
-| order by count_ desc
+| summarize SignIns = count() by ClientOS
+| order by SignIns desc
 ```
 
-**Expected Result:** Sign-ins from the flagged IP report `Linux` as the client OS.
+**Expected Result:** `Linux`
 
-**Pivot Produced:** Client OS, Linux (out-of-profile for a corporate Windows user).
+**Pivot Produced:** Client OS, `Linux`.
 
-**Investigation Value:** Establishes a behavioral anomaly that strengthens the compromise hypothesis beyond the IP signal alone.
+**Investigation Value:** Adds device-context evidence that the sign-in did not match expected corporate user behavior.
 
 ---
 
 ## Q04 - The Stored Detection Type
 
-**Purpose:** Identify the specific risk detection type Identity Protection recorded, to understand what the platform actually saw.
+**Purpose:** Identify the risk detection type stored by Entra ID Protection.
 
 **KQL Query**
 ```kql
 AADUserRiskEvents
 | where UserPrincipalName == "m.smith@lognpacific.org"
-| summarize count() by RiskEventType
-| order by count_ desc
+| summarize Detections = count() by RiskEventType
+| order by Detections desc
 ```
 
-**Expected Result:** `anonymizedIPAddress` is the recorded detection type.
+**Expected Result:** `anonymizedIPAddress`
 
 **Pivot Produced:** Risk type, `anonymizedIPAddress`.
 
-**Investigation Value:** Confirms the attacker reached the tenant from behind an anonymizing service, which both explains the IP geolocation and raises the bar on why the detection should not have been dismissed.
+**Investigation Value:** Confirms Microsoft recognized anonymized infrastructure as part of the sign-in activity.
 
 ---
 
 ## Q05 - Audit to Verdict
 
-**Purpose:** Determine how the generated risk detections were resolved, were they acted on or closed out?
+**Purpose:** Determine how the generated risk detections were resolved.
 
 **KQL Query**
 ```kql
 AADUserRiskEvents
 | where UserPrincipalName == "m.smith@lognpacific.org"
-| summarize count() by RiskState
-| order by count_ desc
+| summarize Events = count() by RiskState
+| order by Events desc
 ```
 
-**Expected Result:** The majority of detections carry `RiskState == dismissed`.
+**Expected Result:** `dismissed`
 
-**Pivot Produced:** Verdict, dismissed.
+**Pivot Produced:** Risk verdict, `dismissed`.
 
-**Investigation Value:** Reframes the incident from "tooling missed it" to "tooling caught it and triage overrode it." This is the root-cause thread for the after-action review.
+**Investigation Value:** Shows the issue was not lack of visibility. The detection existed, but response failed.
 
 ---
 
 ## Q06 - Live Exposure
 
-**Purpose:** Confirm whether the compromised account was still enabled and usable at the time of investigation.
+**Purpose:** Confirm whether the compromised account was still enabled.
 
 **KQL Query**
 ```kql
 IdentityInfo
 | where AccountUPN == "m.smith@lognpacific.org"
-| project AccountUPN, AccountEnabled, AccountObjectId, Timestamp
+| project Timestamp, AccountUPN, AccountEnabled
 | order by Timestamp desc
 | take 1
 ```
 
-**Expected Result:** `AccountEnabled == true`.
+**Expected Result:** `AccountEnabled == true`, meaning the account was `Enabled`.
 
-**Pivot Produced:** Account state, Enabled (live exposure).
+**Pivot Produced:** Account state, `Enabled`.
 
-**Investigation Value:** Confirms the foothold is active, not historical, and sets the urgency for the containment ordering decision finalized in Phase 08.
+**Investigation Value:** Confirms the compromised identity remained live and usable.
