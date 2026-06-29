@@ -11,20 +11,16 @@
 **KQL Query**
 ```kql
 CloudAppEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where ActionType == "FileDownloaded"
-| where IPAddress in ("103.69.224.136", "185.130.187.4")
-      or AccountObjectId == "<m.smith objectId>"
-| project TimeGenerated, ActionType, AccountDisplayName, IPAddress,
-          ObjectName, RawEventData
-| order by TimeGenerated asc
+| where ActionType in ("FileDownloaded", "FileAccessed")
+| project Timestamp, ActionType, ObjectName
+| order by Timestamp asc
 ```
 
-**Expected Result:** `FileDownloaded` events attributable to the compromised session.
+**Expected Result:** The true exfiltration operation is **`FileDownloaded`**, not `FileAccessed`.
 
 **Pivot Produced:** Exfil action, `FileDownloaded`.
 
-**Investigation Value:** Confirms the exfiltration method as direct cloud download, giving a precise event type to count and enumerate.
+**Investigation Value:** Confirms the exfiltration method as direct cloud download and prevents over-counting normal file views.
 
 ---
 
@@ -35,16 +31,14 @@ CloudAppEvents
 **KQL Query**
 ```kql
 CloudAppEvents
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
 | where ActionType == "FileDownloaded"
-| where IPAddress in ("103.69.224.136", "185.130.187.4")
-| summarize FilesDownloaded = dcount(ObjectName),
-            Files = make_set(ObjectName)
+| project Timestamp, ObjectName
+| order by Timestamp asc
 ```
 
-**Expected Result:** **3** distinct files downloaded.
+**Expected Result:** **3** downloaded files, targeted theft of specific high-value files.
 
-**Pivot Produced:** Volume, 3 files (targeted, not bulk).
+**Pivot Produced:** Volume, `3` downloaded files.
 
 **Investigation Value:** Quantifies the theft and characterizes it as deliberate, recon-informed targeting.
 
@@ -57,10 +51,7 @@ CloudAppEvents
 **KQL Query**
 ```kql
 CloudAppEvents
-| where ActionType == "FileDownloaded"
-| where ObjectName has_any ("credential", "vpn", "password")
-| project TimeGenerated, AccountDisplayName, IPAddress, ObjectName
-| order by TimeGenerated asc
+| where ObjectName has "VPN-Access-Credentials"
 ```
 
 **Expected Result:** **`VPN-Access-Credentials.txt`**.
@@ -73,19 +64,18 @@ CloudAppEvents
 
 ## Q25 - The Vault Pointer
 
-**Purpose:** Identify the document that points toward additional stored secrets.
+**Purpose:** Identify the PDF that points toward additional stored secrets.
 
 **KQL Query**
 ```kql
 CloudAppEvents
-| where ActionType == "FileDownloaded"
-| where IPAddress in ("103.69.224.136", "185.130.187.4")
-| project TimeGenerated, AccountDisplayName, ObjectName
-| order by TimeGenerated asc
+| where ObjectName has ".pdf"
+| project Timestamp, ActionType, ObjectName
+| order by Timestamp asc
 ```
 
-**Expected Result:** **`yomark.pdf`** appears in the downloaded set as the vault pointer.
+**Expected Result:** **`yomark.pdf`** appears as a PDF access event. It should not be counted as one of the three downloaded files unless `ActionType` explicitly shows `FileDownloaded`.
 
 **Pivot Produced:** Vault pointer, `yomark.pdf`.
 
-**Investigation Value:** Reveals the attacker was collecting directions to further credentials, extending the credential-expansion objective.
+**Investigation Value:** Reveals the attacker was collecting directions to further credentials, while preserving the correct distinction between accessed and downloaded evidence.
