@@ -1,148 +1,230 @@
 # HUNT-08: Second Vector
 
-**A DFIR investigation into a token-persistence account takeover, business email compromise, and Power Automate-driven mail exfiltration.**
+A DFIR investigation into token persistence, business email compromise, Microsoft Graph abuse, mailbox-rule persistence, and Power Automate driven mail exfiltration.
 
-> **Analyst:** Will-Garlens Pierre, SOC Analyst
-> **Environment:** Log(N) Pacific, Microsoft Sentinel / Microsoft Defender XDR
-> **Discipline:** Identity compromise · BEC · Persistence · Cloud exfiltration · Automation abuse · Containment
-> **Primary query language:** KQL
-
----
-
-## Executive Summary
-
-An external actor compromised the cloud identity `m.smith@lognpacific.org` and operated inside the tenant from an anonymized IP (`103.69.224.136`). Microsoft Entra ID Protection **detected** the malicious sign-ins, and the detections were **dismissed**, leaving the account enabled and the door open.
-
-The attacker did not defeat MFA. They reused a persistent "Keep Me Signed In" refresh token, so subsequent access required only single-factor authentication, and **Conditional Access was never applied** to evaluate the sessions. From that foothold the actor performed directory reconnaissance, ran a **business email compromise** by hijacking a trusted "Updated Banking Details" payment thread, planted **mailbox rules** on the finance contact (`j.reynolds@lognpacific.org`) to conceal verification mail and forward correspondence to an external Proton address, and **exfiltrated three files**, including `VPN-Access-Credentials.txt`, the *second vector* that gives network access independent of the mailbox.
-
-The standout finding: the malicious mail forwarding was **not a human action**. There were **zero** successful MFA logins at the time, and the activity was driven by a planted **Microsoft Power Automate** flow executing through the Microsoft Graph API. The Graph call provably precedes the mail event, cause before effect. Containment therefore hinges on **ordering**: revoke sessions first (live tokens survive a password reset), remove the flow in the Power Platform Admin Center, then reset credentials and rotate the stolen VPN secret.
+> Analyst: Will-Garlens Pierre, SOC Analyst
+> Environment: Log(N) Pacific Cyber Range
+> Platforms: Microsoft Sentinel, Microsoft Defender XDR, Microsoft Entra ID
+> Investigation Type: Cloud DFIR / Threat Hunting / Incident Response
+> Primary Query Language: KQL
 
 ---
 
-## Attack Narrative (Kill Chain)
+# Executive Summary
 
-| Stage | What happened | Phase |
-|---|---|---|
-| **Initial Access** | Sign-in as `m.smith` from anonymized IP `103.69.224.136` on a Linux client; ID Protection risk detection **dismissed**, account left **enabled** | 01 |
-| **Defense Evasion / Persistence (auth)** | Persistent KMSI refresh token → `singleFactorAuthentication`; Conditional Access `notApplied` | 02 |
-| **Discovery** | MFA-status profiling + group enumeration via Microsoft Graph for target selection | 03 |
-| **Impact (Fraud)** | BEC: hijacked "Updated Banking Details" payment thread; reinforced across forward/reply | 04 |
-| **Persistence (mail)** | "Invoice Processing" rule conceals verification mail; external forward to `merovingian1337@proton.me`; both on `j.reynolds` | 05 |
-| **Collection / Exfiltration** | 3 files downloaded, incl. `VPN-Access-Credentials.txt` (second vector) and `yomark.pdf` (vault pointer) | 06 |
-| **Execution (Automation)** | Planted **Power Automate** flow drives the forward via Graph; 0 successful MFA; Graph call precedes mail event | 07 |
-| **Correlation / Containment** | One actor across 7 telemetry tables; automation `20.150.129.194` / App ID `7ab7862c-…`; revoke-before-reset containment | 08 |
+An external actor compromised the cloud identity `m.smith@lognpacific.org` and operated inside the tenant from an anonymized source IP address, `103.69.224.136`.
+
+Microsoft Entra ID Protection successfully detected the malicious authentication activity and generated risk detections associated with anonymized infrastructure. The detections were subsequently dismissed, leaving the compromised identity active and available for continued abuse.
+
+The attacker did not bypass MFA.
+
+Instead, they leveraged an existing Keep Me Signed In (KMSI) refresh token, allowing access through `singleFactorAuthentication` without requiring a new MFA challenge. Conditional Access policies were never evaluated against these sessions because `ConditionalAccessStatus` remained `notApplied` throughout the compromise window.
+
+With persistent access established, the actor performed Microsoft Graph reconnaissance to profile MFA posture and enumerate groups, hijacked an existing banking change conversation, deployed mailbox rules to conceal verification messages, forwarded mail externally to ProtonMail infrastructure, and exfiltrated cloud-stored files.
+
+The investigation ultimately revealed that the fraudulent mail activity was not performed by an interactive user session.
+
+The forwarding operation was executed by a malicious Microsoft Power Automate flow operating through Microsoft Graph API requests.
+
+This discovery fundamentally changed containment priorities.
+
+The correct response sequence became:
+
+1. Revoke active sessions.
+2. Remove the malicious flow.
+3. Reset credentials.
+
+Resetting credentials first would have left both the refresh token and automation workflow operational.
 
 ---
 
-## Repository Structure
+# Attack Narrative
 
-```
+| Stage                       | Description                                                              | Phase    |
+| --------------------------- | ------------------------------------------------------------------------ | -------- |
+| Initial Access              | Compromise of `m.smith@lognpacific.org` from anonymized infrastructure   | Phase 01 |
+| Session Persistence         | KMSI refresh token reuse through `singleFactorAuthentication`            | Phase 02 |
+| Discovery                   | MFA posture profiling and group enumeration through Microsoft Graph      | Phase 03 |
+| Fraud Operations            | Banking detail modification attempt using existing business conversation | Phase 04 |
+| Mail Persistence            | Mailbox concealment and external forwarding rules                        | Phase 05 |
+| Collection and Exfiltration | Download of credential-related files and vault references                | Phase 06 |
+| Automation Execution        | Power Automate workflow executes Graph mail actions                      | Phase 07 |
+| Correlation and Containment | Cross-source attribution and response sequencing                         | Phase 08 |
+
+---
+
+# Repository Structure
+
+```text
 HUNT-08-Second-Vector/
-├── README.md                              <- you are here (full investigation overview)
-├── Phase-01-Triage/
-│   ├── Findings.md
-│   ├── Queries.md
-│   └── screenshots/
-├── Phase-02-Session-Scope/
-├── Phase-03-Directory-Recon/
-├── Phase-04-The-Fraud/
-├── Phase-05-Persistence-Hunt/
-├── Phase-06-Data-Theft/
-├── Phase-07-The-Plant-and-the-Trigger/
-└── Phase-08-Correlation-and-Containment/
+│
+├── README.md
+│
+└── phases/
+    │
+    ├── phase-01-triage/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-02-session-scope/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-03-directory-recon/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-04-fraud/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-05-persistence-hunt/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-06-data-theft/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    ├── phase-07-plant-and-trigger/
+    │   ├── Findings.md
+    │   └── Queries.md
+    │
+    └── phase-08-correlation-containment/
         ├── Findings.md
-        ├── Queries.md
-        └── screenshots/
+        └── Queries.md
 ```
 
-Each phase folder contains a **Findings.md** (objective, scope, data sources, findings table, pivots, analyst assessment, detection opportunities, MITRE mapping, response considerations) and a **Queries.md** (purpose-driven KQL with expected results, pivots produced, and investigation value).
+Each phase contains:
+
+* Investigation findings
+* Supporting evidence
+* Relevant telemetry sources
+* Analyst interpretation
+* MITRE ATT&CK mappings
+* Response recommendations
+* KQL used during the investigation
 
 ---
 
-## Indicators of Compromise (IOCs)
+# Indicators of Compromise
 
-| Type | Indicator | Context |
-|---|---|---|
-| IP (attacker) | `103.69.224.136` | Anonymized source; master pivot; appears across 7 telemetry tables |
-| IP (attacker) | `185.130.187.4` | Secondary attacker mail-sending infrastructure |
-| IP (automation) | `20.150.129.194` | Source of the Power Automate / Graph mail-action requests |
-| IP (platform) | `20.190.190.224` | Microsoft service range (NDR / infrastructure), *not* attacker-originated |
-| Email (exfil) | `merovingian1337@proton.me` | External forwarding destination |
-| App ID | `7ab7862c-4c57-491e-8a45-d52a7e023983` | Power Automate automation identity |
-| File | `VPN-Access-Credentials.txt` | Stolen credential file, the "second vector" |
-| File | `yomark.pdf` | Vault pointer to additional secrets |
-| Mail rule | `Invoice Processing` | Concealment rule on `j.reynolds` mailbox |
-| Subject | `Updated Banking Details - Pacific IT Monthly` | BEC fraud message |
+| Type           | Indicator                                      | Context                                |
+| -------------- | ---------------------------------------------- | -------------------------------------- |
+| Attacker IP    | `103.69.224.136`                               | Primary infrastructure pivot           |
+| Secondary IP   | `185.130.187.4`                                | Secondary mail activity                |
+| Automation IP  | `20.150.129.194`                               | Microsoft Graph mail automation source |
+| External Email | `merovingian1337@proton.me`                    | Mail forwarding destination            |
+| App ID         | `7ab7862c-4c57-491e-8a45-d52a7e023983`         | Power Automate application identity    |
+| File           | `VPN-Access-Credentials.txt`                   | Credential theft target                |
+| File           | `yomark.pdf`                                   | Vault pointer                          |
+| Mail Rule      | `Invoice Processing`                           | Mail concealment rule                  |
+| Subject        | `Updated Banking Details - Pacific IT Monthly` | Fraud conversation                     |
 
-**Compromised / targeted identities:** `m.smith@lognpacific.org` (compromised), `j.reynolds@lognpacific.org` (persistence + fraud target).
+Compromised identity:
 
----
+* `m.smith@lognpacific.org`
 
-## MITRE ATT&CK Summary
+Targeted finance contact:
 
-| Tactic | Technique | ID | Phase |
-|---|---|---|---|
-| Initial Access | Valid Accounts: Cloud Accounts | T1078.004 | 01, 02, 07, 08 |
-| Command & Control | Proxy: Multi-hop Proxy | T1090.003 | 01 |
-| Defense Evasion | Use Alternate Authentication Material: Web Session Cookie | T1550.004 | 02, 08 |
-| Credential Access | Modify Authentication Process (control gap) | T1556 | 02 |
-| Discovery | Account Discovery: Cloud Account | T1087.004 | 03 |
-| Discovery | Permission Groups Discovery: Cloud Groups | T1069.003 | 03 |
-| Initial Access | Internal Spearphishing | T1534 | 04 |
-| Defense Evasion | Impersonation | T1656 | 04 |
-| Collection | Email Collection | T1114 | 04 |
-| Collection | Email Collection: Email Forwarding Rule | T1114.003 | 05, 07 |
-| Defense Evasion | Hide Artifacts: Email Hiding Rules | T1564.008 | 05 |
-| Persistence | Account Manipulation | T1098 | 05 |
-| Collection | Data from Cloud Storage | T1530 | 06 |
-| Credential Access | Unsecured Credentials: Credentials In Files | T1552.001 | 06 |
-| Collection | Data from Information Repositories | T1213 | 06 |
-| Execution | Serverless Execution | T1648 | 07, 08 |
+* `j.reynolds@lognpacific.org`
 
 ---
 
-## Containment Runbook (Order Matters)
+# MITRE ATT&CK Mapping
 
-1. **Revoke sessions** for the compromised identity, invalidate live refresh tokens *first*.
-2. **Remove the malicious flow** in the **Power Platform Admin Center** (App ID `7ab7862c-…`).
-3. **Reset the password**, only *after* sessions are revoked.
-4. **Delete the inbox rules** on `j.reynolds` ("Invoice Processing" + external forward).
-5. **Rotate the stolen VPN credentials** and secure whatever `yomark.pdf` points to.
-6. **Apply Conditional Access**, require MFA, block anonymized sources, enforce sign-in frequency for this user class.
-7. **Block IOCs** and retro-hunt the automation IP / App ID tenant-wide.
-8. **Re-open and audit** the originally dismissed risk detections; review the triage decision.
-
-**Why this order:** the foothold is a live refresh token plus a flow running on delegated authority. A password reset alone leaves both intact. *Revoke before reset.*
-
----
-
-## Investigation Outcome
-
-| Stage | Outcome |
-|---|---|
-| **Initial Access** | Compromised credentials for `m.smith@lognpacific.org`. |
-| **Defense Evasion** | Trusted session persistence through KMSI refresh tokens; Conditional Access not applied. |
-| **Discovery** | Directory reconnaissance and MFA-registration profiling. |
-| **Collection** | Mailbox monitoring and credential harvesting. |
-| **Exfiltration** | External forwarding rule plus Power Automate workflow. |
-| **Persistence** | Malicious mailbox rules combined with a Microsoft Power Automate flow. |
-| **Impact** | Business email compromise involving payment-redirection attempts. |
-| **Containment** | Session revocation, flow removal, password reset, Conditional Access validation. |
-
-## Key Lessons
-
-- **Detection without response is not protection.** ID Protection caught this on day one; a dismissal made the whole intrusion possible.
-- **KMSI sessions bypass password-reset assumptions.** A reset alone does not invalidate a live refresh token; sessions must be revoked first.
-- **Power Automate can act as persistence.** A planted flow keeps executing on delegated authority after the obvious account actions are taken.
-- **Microsoft Graph logs are critical for cloud investigations.** The forward looked like a user action; only Graph activity proved it was automation.
-- **Conditional Access coverage gaps become identity attack paths.** An unevaluated sign-in is an unprotected one.
+| Tactic            | Technique                                                 | ID        |
+| ----------------- | --------------------------------------------------------- | --------- |
+| Initial Access    | Valid Accounts: Cloud Accounts                            | T1078.004 |
+| Defense Evasion   | Use Alternate Authentication Material: Web Session Cookie | T1550.004 |
+| Discovery         | Account Discovery: Cloud Account                          | T1087.004 |
+| Discovery         | Permission Groups Discovery                               | T1069.003 |
+| Collection        | Email Collection                                          | T1114     |
+| Collection        | Email Forwarding Rule                                     | T1114.003 |
+| Defense Evasion   | Hide Artifacts: Email Hiding Rules                        | T1564.008 |
+| Persistence       | Account Manipulation                                      | T1098     |
+| Collection        | Data from Cloud Storage                                   | T1530     |
+| Credential Access | Credentials In Files                                      | T1552.001 |
+| Collection        | Data from Information Repositories                        | T1213     |
+| Execution         | Serverless Execution                                      | T1648     |
 
 ---
 
-## Tooling & Skills Demonstrated
+# Containment Strategy
 
-`Microsoft Sentinel` · `Microsoft Defender XDR` · `KQL` · `Microsoft Entra ID Protection` · `Microsoft Graph activity analysis` · `Power Platform / Power Automate abuse analysis` · `BEC investigation` · `mailbox-rule persistence hunting` · `cross-source correlation` · `MITRE ATT&CK mapping` · `incident containment & response sequencing`
+1. Revoke active sessions associated with the compromised identity.
+2. Remove the malicious Power Automate flow.
+3. Reset credentials for the compromised account.
+4. Remove malicious mailbox rules.
+5. Rotate VPN credentials and associated secrets.
+6. Implement Conditional Access enforcement.
+7. Block malicious indicators and perform retrospective hunting.
+8. Review dismissed risk detections and incident triage decisions.
+
+## Why revoke before reset?
+
+Password resets do not invalidate active refresh tokens.
+
+An attacker maintaining access through KMSI persistence can continue operating even after a password change unless active sessions are revoked first.
+
+Similarly, delegated Power Automate workflows continue executing independently of interactive sign-ins until explicitly removed.
 
 ---
 
-*Investigation conducted in the Log(N) Pacific cyber-range environment as a structured, phased threat hunt. All findings are evidence-based and reproducible from the queries documented in each phase.*
+# Investigation Outcome
+
+| Area           | Result                                    |
+| -------------- | ----------------------------------------- |
+| Initial Access | Compromised cloud credentials             |
+| Persistence    | Refresh token reuse                       |
+| Discovery      | Graph reconnaissance                      |
+| Collection     | Mail monitoring                           |
+| Exfiltration   | External forwarding and file theft        |
+| Automation     | Power Automate workflow abuse             |
+| Impact         | Business email compromise                 |
+| Containment    | Session revocation and automation removal |
+
+---
+
+# Key Lessons Learned
+
+* Detection without response is ineffective.
+* Password resets do not invalidate refresh tokens.
+* Conditional Access coverage gaps become attack paths.
+* Power Automate can become a persistence mechanism.
+* Microsoft Graph telemetry is critical during cloud investigations.
+* Response sequencing matters as much as response actions.
+
+---
+
+# Skills Demonstrated
+
+* Digital Forensics and Incident Response
+* Threat Hunting
+* Microsoft Sentinel
+* Microsoft Defender XDR
+* Microsoft Entra ID
+* Microsoft Graph Analysis
+* Power Automate Abuse Analysis
+* Business Email Compromise Investigation
+* Mailbox Rule Analysis
+* KQL Development
+* MITRE ATT&CK Mapping
+* Incident Containment and Recovery
+
+---
+
+# Technologies Used
+
+* Microsoft Sentinel
+* Microsoft Defender XDR
+* Microsoft Entra ID
+* Microsoft Graph
+* Microsoft Power Automate
+* Kusto Query Language (KQL)
+
+---
+
+Investigation conducted within the Log(N) Pacific cyber range environment.
+
+All findings are evidence-based and reproducible using the documented KQL queries included throughout the repository.
