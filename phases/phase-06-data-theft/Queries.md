@@ -1,81 +1,123 @@
 # Phase 06 - Data Theft: Queries
 
-> Query log for Phase 06. Focus is the exfiltration: the download action, the volume, and the specific high-value files, especially the credential material that forms the second vector.
+> Query log for Phase 06. These queries separate file access from file download, count the stolen files, identify the credential document, and confirm the vault pointer.
 
 ---
 
 ## Q22 - The Exfil Operation
 
-**Purpose:** Identify the action type the attacker used to exfiltrate data.
+**Purpose:** Determine which action type represents actual exfiltration.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ActionType in ("FileDownloaded", "FileAccessed")
-| project Timestamp, ActionType, ObjectName
+| project Timestamp,
+          ActionType,
+          ObjectName,
+          AccountDisplayName,
+          Application
 | order by Timestamp asc
 ```
 
-**Expected Result:** The true exfiltration operation is **`FileDownloaded`**, not `FileAccessed`.
+**Expected Result:** `FileDownloaded`, not `FileAccessed`.
 
-**Pivot Produced:** Exfil action, `FileDownloaded`.
+**Pivot Produced:** Exfiltration action, `FileDownloaded`.
 
-**Investigation Value:** Confirms the exfiltration method as direct cloud download and prevents over-counting normal file views.
+**Investigation Value:** Prevents counting normal access/viewing as data theft.
 
 ---
 
 ## Q23 - Volume Taken
 
-**Purpose:** Count how many files were downloaded during the compromise.
+**Purpose:** Count the downloaded files and list them.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ActionType == "FileDownloaded"
-| project Timestamp, ObjectName
+| project Timestamp,
+          ActionType,
+          ObjectName,
+          AccountDisplayName,
+          Application
 | order by Timestamp asc
 ```
 
-**Expected Result:** **3** downloaded files, targeted theft of specific high-value files.
+**Expected Result:** `3`, targeted theft of specific high-value files.
 
-**Pivot Produced:** Volume, `3` downloaded files.
+**Pivot Produced:** Download count, `3`.
 
-**Investigation Value:** Quantifies the theft and characterizes it as deliberate, recon-informed targeting.
+**Investigation Value:** Shows targeted collection rather than bulk scraping.
 
 ---
 
 ## Q24 - The Credential Document
 
-**Purpose:** Identify the credential file among the downloaded set.
+**Purpose:** Identify downloaded credential material.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ObjectName has "VPN-Access-Credentials"
+| project Timestamp,
+          ActionType,
+          ObjectName,
+          AccountDisplayName,
+          Application
+| order by Timestamp asc
 ```
 
-**Expected Result:** **`VPN-Access-Credentials.txt`**.
+**Expected Result:** `VPN-Access-Credentials.txt`
 
-**Pivot Produced:** Second-vector credential file, `VPN-Access-Credentials.txt`.
+**Pivot Produced:** Credential file, `VPN-Access-Credentials.txt`.
 
-**Investigation Value:** Identifies the network-access path that survives mailbox containment, the namesake of the investigation.
+**Investigation Value:** Identifies the second vector, VPN credential access beyond the original mailbox.
 
 ---
 
 ## Q25 - The Vault Pointer
 
-**Purpose:** Identify the PDF that points toward additional stored secrets.
+**Purpose:** Identify the PDF that pointed toward additional credential storage.
 
 **KQL Query**
 ```kql
 CloudAppEvents
 | where ObjectName has ".pdf"
-| project Timestamp, ActionType, ObjectName
+| project Timestamp,
+          ActionType,
+          ObjectName,
+          AccountDisplayName,
+          Application
 | order by Timestamp asc
 ```
 
-**Expected Result:** **`yomark.pdf`** appears as a PDF access event. It should not be counted as one of the three downloaded files unless `ActionType` explicitly shows `FileDownloaded`.
+**Expected Result:** `yomark.pdf`, observed as an access event.
 
 **Pivot Produced:** Vault pointer, `yomark.pdf`.
 
-**Investigation Value:** Reveals the attacker was collecting directions to further credentials, while preserving the correct distinction between accessed and downloaded evidence.
+**Investigation Value:** Preserves the important distinction: `yomark.pdf` was accessed, while the exfiltration count remains three downloaded files.
+
+---
+
+## Supporting Query - High-Value File Names
+
+**Purpose:** Search for credential, VPN, vault, banking, or vendor related file names.
+
+**KQL Query**
+```kql
+CloudAppEvents
+| where ObjectName has_any ("credential", "credentials", "vpn", "vault", "bank", "vendor", "payment")
+| project Timestamp,
+          ActionType,
+          ObjectName,
+          AccountDisplayName,
+          Application
+| order by Timestamp asc
+```
+
+**Expected Result:** Returns high-value file activity relevant to credential expansion and fraud.
+
+**Pivot Produced:** Sensitive-file activity timeline.
+
+**Investigation Value:** Supports hunting for related theft beyond the exact challenge answer.
