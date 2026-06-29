@@ -1,72 +1,80 @@
 # Phase 03 - Directory Recon: Queries
 
-> Query log for Phase 03. Focus is the discovery stage, MFA-status profiling and group enumeration performed from the compromised session via Microsoft Graph.
+> Query log for Phase 03. These queries identify Microsoft Graph based MFA posture profiling and group enumeration from the compromised session.
 
 ---
 
 ## Q12 - MFA-Status Profiling
 
-**Purpose:** Detect whether the attacker enumerated users' MFA / authentication-method posture to identify weakly protected accounts.
+**Purpose:** Identify Graph activity used to profile user MFA or authentication registration posture.
 
 **KQL Query**
 ```kql
 MicrosoftGraphActivityLogs
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
 | where RequestMethod == "GET"
-| where RequestUri has_any ("authentication/methods", "authenticationMethods",
-                            "perUserMfaState", "/users")
-| project TimeGenerated, IPAddress, RequestMethod, RequestUri, AppId,
-          ServicePrincipalId, UserId
+| where RequestUri has_any ("userRegistrationDetails", "authentication", "authenticationMethods")
+| project TimeGenerated,
+          IPAddress,
+          RequestMethod,
+          RequestUri,
+          AppId,
+          ServicePrincipalId
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** A burst of `GET` requests against user and authentication-method endpoints from the compromised session.
+**Expected Result:** Requests referencing `userRegistrationDetails` or authentication-method posture.
 
-**Pivot Produced:** Recon behavior, per-user MFA/authentication-method profiling.
+**Pivot Produced:** MFA posture profiling through Microsoft Graph.
 
-**Investigation Value:** Confirms the attacker was qualifying targets by protection level, not browsing, establishing intent for the fraud that follows.
+**Investigation Value:** Shows the attacker was checking identity security posture before later fraud and persistence steps.
 
 ---
 
 ## Q13 - Group Enumeration
 
-**Purpose:** Detect whether the attacker enumerated directory groups to map privilege and distribution structure.
+**Purpose:** Identify Graph activity used to enumerate group membership or directory groups.
 
 **KQL Query**
 ```kql
 MicrosoftGraphActivityLogs
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
 | where RequestMethod == "GET"
-| where RequestUri has "/groups"
-| project TimeGenerated, IPAddress, RequestMethod, RequestUri, AppId,
-          ServicePrincipalId, UserId
+| where RequestUri has_any ("/groups", "memberOf", "transitiveMemberOf")
+| project TimeGenerated,
+          IPAddress,
+          RequestMethod,
+          RequestUri,
+          AppId,
+          ServicePrincipalId
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** `GET /groups` (and member-listing) requests from the compromised session.
+**Expected Result:** Graph requests showing group or membership enumeration.
 
-**Pivot Produced:** Recon behavior, group enumeration.
+**Pivot Produced:** Group enumeration behavior.
 
-**Investigation Value:** Reveals the privilege/distribution map the attacker built, which explains the target selection in Phases 04 and 05.
+**Investigation Value:** Shows the attacker mapped authorization and distribution structure before targeting finance workflows.
 
 ---
 
-### Supporting query: Directory reads via AuditLogs (corroboration)
+## Supporting Query - Graph Recon From Attacker IP
 
-**Purpose:** Corroborate Graph-layer recon with any directory read operations recorded by Azure AD.
+**Purpose:** Review all Graph activity tied to the attacker IP around the investigation window.
 
 **KQL Query**
 ```kql
-AuditLogs
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where OperationName has_any ("group", "member", "user")
-| where Category == "DirectoryManagement" or Category == "UserManagement"
-| project TimeGenerated, OperationName, InitiatedBy, TargetResources, Result
+MicrosoftGraphActivityLogs
+| where IPAddress == "103.69.224.136"
+| project TimeGenerated,
+          IPAddress,
+          RequestMethod,
+          RequestUri,
+          AppId,
+          ServicePrincipalId
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** Read/list operations aligning in time with the Graph recon burst.
+**Expected Result:** Graph read activity aligned with the compromised session.
 
-**Pivot Produced:** Cross-source confirmation of the recon window.
+**Pivot Produced:** Graph-based discovery timeline.
 
-**Investigation Value:** Strengthens attribution by corroborating Graph telemetry with native Azure AD audit records.
+**Investigation Value:** Provides a broader validation query to support the two specific recon findings.
