@@ -1,34 +1,36 @@
 # Phase 07 - The Plant and the Trigger: Queries
 
-> Query log for Phase 07. Focus is proving automation, not a human, drove the malicious mail behavior, by counting successful MFA, naming the automation app, locating the responsible table, and ordering the sequence.
+> Query log for Phase 07. These queries prove the mail behavior was automation-driven, not a human action, by checking MFA evidence, naming the automation app, identifying the responsible telemetry table, and validating sequence.
 
 ---
 
 ## Q26 - Disprove the Innocent Explanation
 
-**Purpose:** Test the "a logged-in user just forwarded an email" hypothesis by counting successful MFA-satisfied sign-ins at the time of the mail behavior.
+**Purpose:** Test whether a legitimate user completed MFA during the suspicious activity window.
 
 **KQL Query**
 ```kql
 SigninLogs
 | where UserPrincipalName == "m.smith@lognpacific.org"
-| where TimeGenerated between (datetime(2026-06-10) .. datetime(2026-06-20))
-| where ResultType == 0
-| where AuthenticationRequirement == "multiFactorAuthentication"
-| summarize SuccessfulMFA = count()
+| project TimeGenerated,
+          IPAddress,
+          AuthenticationRequirement,
+          AuthenticationDetails,
+          ConditionalAccessStatus
+| order by TimeGenerated asc
 ```
 
-**Expected Result:** `SuccessfulMFA == 0`.
+**Expected Result:** No successful MFA completion tied to the malicious activity, supporting a final successful MFA count of `0`.
 
-**Pivot Produced:** Successful MFA count, 0 (no interactive human login).
+**Pivot Produced:** Successful MFA count, `0`.
 
-**Investigation Value:** Eliminates the innocent-user explanation. If no human passed MFA, no human interactively performed the action.
+**Investigation Value:** Eliminates the idea that a legitimate human user performed the forwarding action interactively.
 
 ---
 
 ## Q27 - Catch the Plant
 
-**Purpose:** Identify the application responsible for the activity, distinguishing an automation app from the user's mail client.
+**Purpose:** Identify the application tied to the automation activity.
 
 **KQL Query**
 ```kql
@@ -38,17 +40,17 @@ SigninLogs
 | order by count_ desc
 ```
 
-**Expected Result:** **Microsoft Flow Portal** surfaces as the application behind the activity.
+**Expected Result:** `Microsoft Flow Portal`
 
-**Pivot Produced:** Automation app, Microsoft Flow Portal.
+**Pivot Produced:** Automation application, `Microsoft Flow Portal`.
 
-**Investigation Value:** Names the planted automation, redirecting the investigation from mailbox client logs to the automation/Graph layer.
+**Investigation Value:** Connects the activity to Power Automate or Microsoft Flow rather than a normal mail client.
 
 ---
 
 ## Q28 - The Cause Behind the Forward
 
-**Purpose:** Discover which telemetry table holds the activity responsible for the forward.
+**Purpose:** Identify which table contains the responsible telemetry for the mail-driving action.
 
 **KQL Query**
 ```kql
@@ -57,17 +59,17 @@ search *
 | order by count_ desc
 ```
 
-**Expected Result:** **`MicrosoftGraphActivityLogs`** is identified as the table carrying the responsible API activity.
+**Expected Result:** `MicrosoftGraphActivityLogs`
 
 **Pivot Produced:** Responsible table, `MicrosoftGraphActivityLogs`.
 
-**Investigation Value:** Points the analyst at the Graph-layer telemetry that explains the forward, invisible to mailbox-only review.
+**Investigation Value:** Redirects the analyst from mailbox-only review to Graph API telemetry.
 
 ---
 
 ## Q29 - Prove It With The Sequence
 
-**Purpose:** Establish time ordering between the Graph API call and the resulting mail event to prove cause precedes effect.
+**Purpose:** Show the Graph API action occurred before the resulting mail event.
 
 **KQL Query**
 ```kql
@@ -81,8 +83,8 @@ MicrosoftGraphActivityLogs
 | order by TimeGenerated asc
 ```
 
-**Expected Result:** The Graph API call appears **before** the mail event in time order.
+**Expected Result:** The Graph call appears before the mail event in the activity sequence.
 
-**Pivot Produced:** Sequence proof, Graph call → then mail event.
+**Pivot Produced:** Sequence proof, Graph call then mail event.
 
-**Investigation Value:** Provides the cause-before-effect evidence that automation, not a human, triggered the forward, the evidentiary core of the phase.
+**Investigation Value:** Provides the cause-before-effect evidence that a planted automation, not a user at a keyboard, triggered the forward.
